@@ -1,8 +1,11 @@
-"""视觉模型客户端 — 兼容 OpenAI 接口，支持多 Provider 切换"""
+"""视觉模型客户端 — 兼容 OpenAI 接口，支持多 Provider 切换 + 磁盘缓存"""
 
 import os
 
 from openai import APIError, OpenAI
+
+from .cache import get_cache, set_cache, compute_cache_key
+from .image_utils import ImageData, normalize_prompt
 
 # ── Provider 预设 ──────────────────────────────────────────────────────────
 # 通过 VISION_PROVIDER 环境变量切换，默认 bailian
@@ -85,24 +88,29 @@ class VisionClient:
 
     def __init__(self, model: str | None = None):
         base_url, self.model, api_key = _resolve_config(model)
+        self.provider = os.getenv("VISION_PROVIDER", "bailian")
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
-    def describe(self, image_uri: str, prompt: str | None = None, max_tokens: int | None = None, mode: str = "quick") -> dict:
+    def describe(self, image_data: ImageData, prompt: str | None = None,
+                 max_tokens: int | None = None, mode: str = "quick",
+                 force_refresh: bool = False) -> dict:
         """分析图片并返回面向软件开发的描述
 
         Args:
-            image_uri: 图片 data URI（base64）或图片 URL
+            image_data: 图片数据（data URI + SHA256 hash）
             prompt: 针对图片的自定义提问，不传则根据 mode 选择系统提示词
-            max_tokens: 最大输出 token 数，默认 600 (quick) / 1500 (detailed)，可通过 VISION_MAX_TOKENS 环境变量覆盖
+            max_tokens: 最大输出 token 数
             mode: "quick" 精简快速 | "detailed" 七维度详细分析
+            force_refresh: True 时跳过缓存，重新调用模型
 
         Returns:
             {"description": "...", "model": "...", "status": "success|error"}
         """
-        # 确定 system prompt
-        if prompt:
+        # ── 确定 system prompt ──
+        norm_prompt = normalize_prompt(prompt)
+        if norm_prompt:
             system_prompt = SYSTEM_PROMPT_QUICK
-            user_text = prompt
+            user_text = norm_prompt
         elif mode == "detailed":
             system_prompt = SYSTEM_PROMPT
             user_text = "请描述这张图片"
@@ -110,7 +118,20 @@ class VisionClient:
             system_prompt = SYSTEM_PROMPT_QUICK
             user_text = "请描述这张图片"
 
-        # max_tokens 优先级: 参数 > 环境变量 > 默认值
+        # ── 缓存检查 ──
+        if not force_refresh:
+            cache_key = compute_cache_key(
+                image_hash=image_data.image_hash,
+                prompt=norm_prompt,
+                mode=mode,
+                provider=self.provider,
+                model=self.model,
+            )
+            cached = get_cache(cache_key)
+            if cached is not None:
+                return cached
+
+        # ── 调用 API ──
         default_limit = 600 if mode == "quick" else 1500
         resolved_max_tokens = max_tokens or int(os.getenv("VISION_MAX_TOKENS", "0")) or default_limit
 
@@ -123,17 +144,34 @@ class VisionClient:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "image_url", "image_url": {"url": image_uri}},
+                            {"type": "image_url", "image_url": {"url": image_data.data_uri}},
                             {"type": "text", "text": user_text},
                         ],
                     },
                 ],
             )
-            return {
+            result = {
                 "description": response.choices[0].message.content,
                 "model": self.model,
                 "status": "success",
             }
+
+            # 成功时才写缓存
+            if not force_refresh:
+                set_cache(cache_key, provider=self.provider, model=self.model, result=result)
+            else:
+                # force_refresh 也写缓存（覆盖）
+                cache_key = compute_cache_key(
+                    image_hash=image_data.image_hash,
+                    prompt=norm_prompt,
+                    mode=mode,
+                    provider=self.provider,
+                    model=self.model,
+                )
+                set_cache(cache_key, provider=self.provider, model=self.model, result=result)
+
+            return result
+
         except APIError as e:
             return {
                 "description": "",
@@ -154,6 +192,9 @@ def _get_client() -> VisionClient:
     return _default_client
 
 
-def describe(image_uri: str, prompt: str | None = None, max_tokens: int | None = None, mode: str = "quick") -> dict:
+def describe(image_data: ImageData, prompt: str | None = None,
+             max_tokens: int | None = None, mode: str = "quick",
+             force_refresh: bool = False) -> dict:
     """便捷函数：分析图片并返回描述"""
-    return _get_client().describe(image_uri, prompt=prompt, max_tokens=max_tokens, mode=mode)
+    return _get_client().describe(image_data, prompt=prompt, max_tokens=max_tokens,
+                                  mode=mode, force_refresh=force_refresh)
