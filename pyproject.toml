@@ -1,0 +1,19 @@
+[project]
+name = "vision-mcp-server"
+version = "0.1.0"
+description = "为 MCP 客户端（Claude Code 等）提供图片理解能力，通过阿里云百炼 VL 模型分析图片内容"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "openai>=1.0.0",
+]
+
+[project.scripts]
+vision-mcp-server = "vision_mcp_server.__main__:main"
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
