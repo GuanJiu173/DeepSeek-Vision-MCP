@@ -143,6 +143,26 @@ image_compare(expected_image: str, actual_image: str, mode: str = "ui", force_re
 Claude 生成页面 → Playwright 截图 → Vision MCP 对比 → 输出差异 → Claude 修复
 ```
 
+## 验证记录
+
+`image_compare` 实测结果（设计稿 vs 含有意差异的实现截图）：
+
+| 引入的差异 | 是否检出 |
+|-----------|----------|
+| 按钮颜色 #2563eb → #dc2626 | 检出 |
+| 职位文字"高级"缺失 | 检出 |
+| 头像 64px → 48px | 漏检 |
+| 卡片圆角 12px → 4px | 漏检 |
+| 背景色 #f0f2f5 → #fafafa | 漏检 |
+| 姓名字号 20px → 16px | 漏检 |
+
+**结论**：视觉模型在颜色偏差和文字内容差异上表现良好，但不擅长精确数值比较（像素级大小、圆角半径）。适合做"有没有差异 + 大概差在哪"的定性检查，像素级精确定位需叠加工具补充。
+
+**已验证的完整链路**：
+```
+设计稿 HTML → Playwright 截图 → image_compare → 结构化 JSON 差异 → 人工确认
+``
+
 ### detailed 模式的七个分析维度
 
 1. UI 布局 — 整体结构、区块位置比例
