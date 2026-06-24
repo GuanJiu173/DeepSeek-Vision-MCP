@@ -26,6 +26,29 @@ python -m vision_mcp_server
 | `VISION_MODEL` | 按 Provider | 覆盖模型名称 |
 | `VISION_API_KEY` | 按 Provider | 覆盖 API Key |
 | `VISION_MAX_TOKENS` | `600` (quick) / `1500` (detailed) | 最大输出 token 数 |
+| `VISION_MODELS` | — | 模型回退列表，英文逗号分隔（见下文） |
+
+### 模型回退 Router
+
+设置 `VISION_MODELS` 环境变量，指定一组模型按顺序尝试：
+
+```bash
+VISION_MODELS=qwen-vl-max,qwen-vl-plus,qwen-3.7 python -m vision_mcp_server
+```
+
+当当前模型返回 **HTTP 429**（限流）、**quota exceeded**（配额超限）或 **insufficient balance**（余额不足）时，自动切换到下一个模型。所有模型都失败才返回错误。
+
+未设置 `VISION_MODELS` 时行为不变（由 `VISION_MODEL` 或 Provider 默认决定）。
+
+### 缓存
+
+支持磁盘缓存，默认 7 天 TTL。环境变量控制：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `VISION_CACHE_ENABLED` | `true` | `false` 时禁用缓存 |
+| `VISION_CACHE_TTL` | `604800` | 缓存过期时间（秒） |
+| `VISION_CACHE_DIR` | 按平台 | 缓存存储目录，Windows: `%LOCALAPPDATA%/vision-mcp-server/cache` |
 
 ### 各 Provider 默认值
 
@@ -38,7 +61,7 @@ python -m vision_mcp_server
 ## Tool: `image_understand`
 
 ```
-image_understand(image_path: str, prompt: str | None = None, mode: str = "quick") -> dict
+image_understand(image_path: str, prompt: str | None = None, mode: str = "quick", force_refresh: bool = False) -> dict
 ```
 
 ### 参数
@@ -48,6 +71,7 @@ image_understand(image_path: str, prompt: str | None = None, mode: str = "quick"
 | `image_path` | string | 必填 | 本地图片路径（PNG/JPG/GIF/WebP）或 HTTP URL |
 | `prompt` | string | `None` | 自定义提问，不传则自动选择提示词 |
 | `mode` | string | `"quick"` | `"quick"` 精简快速（5-10s）/ `"detailed"` 七维度详细分析 |
+| `force_refresh` | bool | `false` | 跳过缓存，重新调用模型分析 |
 
 ### 返回
 

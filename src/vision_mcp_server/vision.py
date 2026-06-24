@@ -1,4 +1,4 @@
-"""视觉模型客户端 — 兼容 OpenAI 接口，支持多 Provider 切换 + 磁盘缓存"""
+"""视觉模型客户端 — 兼容 OpenAI 接口，支持多 Provider 切换 + 磁盘缓存 + 模型回退"""
 
 import os
 
@@ -53,6 +53,33 @@ SYSTEM_PROMPT_QUICK = """你是一个 UI 分析助手。用中文简洁描述这
 
 输出格式：用 Markdown 列表，每个要点一行。"""
 
+# ── 模型回退 ──────────────────────────────────────────────────────────────
+
+FALLBACK_KEYWORDS = ["quota", "insufficient balance", "rate limit"]
+
+
+def _parse_model_list() -> list[str]:
+    """解析 VISION_MODELS 环境变量，返回有序模型列表
+
+    未设置或为空时返回空列表，调用方使用单模型兜底。
+    """
+    raw = os.getenv("VISION_MODELS")
+    if not raw:
+        return []
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+def _is_fallback_error(error: APIError) -> bool:
+    """判断 API 错误是否应触发模型回退
+
+    触发条件：HTTP 429 或错误消息含 quota / insufficient balance / rate limit
+    """
+    status = getattr(error, "status_code", None)
+    if status == 429:
+        return True
+    msg = str(error).lower()
+    return any(kw in msg for kw in FALLBACK_KEYWORDS)
+
 
 def _resolve_config(model: str | None = None) -> tuple[str, str, str]:
     """解析最终使用的 base_url, model, api_key
@@ -62,13 +89,9 @@ def _resolve_config(model: str | None = None) -> tuple[str, str, str]:
     provider_name = os.getenv("VISION_PROVIDER", "bailian")
     preset = PROVIDERS.get(provider_name, PROVIDERS["bailian"])
 
-    # base_url
     base_url = os.getenv("VISION_BASE_URL") or preset["base_url"]
-
-    # model
     resolved_model = model or os.getenv("VISION_MODEL") or preset["model"]
 
-    # api_key: VISION_API_KEY > provider's api_key_envs
     api_key = os.getenv("VISION_API_KEY")
     if not api_key:
         for env_name in preset["api_key_envs"]:
@@ -87,9 +110,14 @@ class VisionClient:
     """视觉模型客户端 — 兼容任意 OpenAI 兼容接口"""
 
     def __init__(self, model: str | None = None):
-        base_url, self.model, api_key = _resolve_config(model)
+        base_url, resolved_model, api_key = _resolve_config(model)
         self.provider = os.getenv("VISION_PROVIDER", "bailian")
         self.client = OpenAI(api_key=api_key, base_url=base_url)
+
+        # 模型回退列表：VISION_MODELS > 单模型
+        models_from_env = _parse_model_list()
+        self.models = models_from_env or [resolved_model]
+        self.model = self.models[0]  # primary model（向后兼容）
 
     def describe(self, image_data: ImageData, prompt: str | None = None,
                  max_tokens: int | None = None, mode: str = "quick",
@@ -118,67 +146,77 @@ class VisionClient:
             system_prompt = SYSTEM_PROMPT_QUICK
             user_text = "请描述这张图片"
 
-        # ── 缓存检查 ──
-        if not force_refresh:
-            cache_key = compute_cache_key(
-                image_hash=image_data.image_hash,
-                prompt=norm_prompt,
-                mode=mode,
-                provider=self.provider,
-                model=self.model,
-            )
-            cached = get_cache(cache_key)
-            if cached is not None:
-                return cached
-
-        # ── 调用 API ──
         default_limit = 600 if mode == "quick" else 1500
         resolved_max_tokens = max_tokens or int(os.getenv("VISION_MAX_TOKENS", "0")) or default_limit
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                max_tokens=resolved_max_tokens,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": image_data.data_uri}},
-                            {"type": "text", "text": user_text},
-                        ],
-                    },
-                ],
-            )
-            result = {
-                "description": response.choices[0].message.content,
-                "model": self.model,
-                "status": "success",
-            }
+        # ── 模型回退循环 ──
+        last_error = None
 
-            # 成功时才写缓存
+        for model in self.models:
+            # 缓存检查（按 model 隔离）
             if not force_refresh:
-                set_cache(cache_key, provider=self.provider, model=self.model, result=result)
-            else:
-                # force_refresh 也写缓存（覆盖）
                 cache_key = compute_cache_key(
                     image_hash=image_data.image_hash,
                     prompt=norm_prompt,
                     mode=mode,
                     provider=self.provider,
-                    model=self.model,
+                    model=model,
                 )
-                set_cache(cache_key, provider=self.provider, model=self.model, result=result)
+                cached = get_cache(cache_key)
+                if cached is not None:
+                    return cached
 
-            return result
+            try:
+                response = self.client.chat.completions.create(
+                    model=model,
+                    max_tokens=resolved_max_tokens,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": image_data.data_uri}},
+                                {"type": "text", "text": user_text},
+                            ],
+                        },
+                    ],
+                )
+                result = {
+                    "description": response.choices[0].message.content,
+                    "model": model,
+                    "status": "success",
+                }
 
-        except APIError as e:
-            return {
-                "description": "",
-                "model": self.model,
-                "status": "error",
-                "error": str(e),
-            }
+                # 成功时写缓存
+                cache_key = compute_cache_key(
+                    image_hash=image_data.image_hash,
+                    prompt=norm_prompt,
+                    mode=mode,
+                    provider=self.provider,
+                    model=model,
+                )
+                set_cache(cache_key, provider=self.provider, model=model, result=result)
+                return result
+
+            except APIError as e:
+                if _is_fallback_error(e) and model != self.models[-1]:
+                    last_error = e
+                    continue  # 尝试下一个模型
+                # 不可回退的错误或最后一个模型
+                return {
+                    "description": "",
+                    "model": model,
+                    "status": "error",
+                    "error": str(e),
+                }
+
+        # 所有模型都失败（仅当 models 为空或全部回退失败时到达）
+        return {
+            "description": "",
+            "model": self.models[-1] if self.models else self.model,
+            "status": "error",
+            "error": str(last_error or "所有模型均失败"),
+        }
 
 
 # 模块级便捷函数
