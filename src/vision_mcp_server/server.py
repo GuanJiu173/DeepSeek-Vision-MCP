@@ -2,6 +2,7 @@
 
 from mcp.server.fastmcp import FastMCP
 
+from .compare import image_compare as _compare
 from .image_utils import image_to_data_uri
 from .vision import describe
 
@@ -23,3 +24,25 @@ def image_understand(image_path: str, prompt: str | None = None,
     """
     image_data = image_to_data_uri(image_path)
     return describe(image_data, prompt=prompt, mode=mode, force_refresh=force_refresh)
+
+
+@mcp.tool()
+def image_compare(expected_image: str, actual_image: str,
+                  mode: str = "ui", force_refresh: bool = False) -> dict:
+    """对比两张图片（设计稿 vs 实现截图），返回结构化差异列表。
+
+    适合 UI 还原度检查、回归测试等场景。
+
+    Args:
+        expected_image: 预期图片路径（设计稿）或 URL
+        actual_image: 实际图片路径（实现截图）或 URL
+        mode: 对比模式，默认 "ui"
+        force_refresh: True 时跳过缓存，重新分析
+    """
+    result = _compare(
+        expected_image=expected_image,
+        actual_image=actual_image,
+        mode=mode,
+        force_refresh=force_refresh,
+    )
+    return result.to_dict()

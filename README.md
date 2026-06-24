@@ -90,6 +90,59 @@ image_understand(image_path: str, prompt: str | None = None, mode: str = "quick"
 | `quick` | 5-10s | 3-4 要点 | 日常识图、快速了解 |
 | `detailed` | 15-30s | 七维度分析 | UI 还原、设计评审、图表提取 |
 
+## Tool: `image_compare`
+
+对比两张图片（设计稿 vs 实现截图），返回结构化差异列表。
+
+```
+image_compare(expected_image: str, actual_image: str, mode: str = "ui", force_refresh: bool = False) -> dict
+```
+
+### 参数
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `expected_image` | string | 必填 | 预期图片路径（设计稿）或 URL |
+| `actual_image` | string | 必填 | 实际图片路径（实现截图）或 URL |
+| `mode` | string | `"ui"` | 对比模式，默认 UI 对比 |
+| `force_refresh` | bool | `false` | 跳过缓存重新对比 |
+
+### 返回
+
+```json
+{
+  "summary": "发现 4 处差异",
+  "differences": [
+    {
+      "type": "layout",
+      "severity": "high",
+      "area": "header",
+      "expected": "导航栏高度约 64px",
+      "actual": "导航栏高度约 48px"
+    }
+  ],
+  "model": "qwen-vl-max",
+  "cached": false
+}
+```
+
+### 差异类型
+
+| 类型 | 说明 |
+|------|------|
+| `layout` | 布局偏差：位置、间距、对齐 |
+| `color` | 颜色差异：主色调、背景色 |
+| `spacing` | 间距问题：padding、margin |
+| `typography` | 字体差异：字号、字重、行高 |
+| `missing` | 缺少元素 |
+| `extra` | 多余元素 |
+
+### 推荐流程
+
+```
+Claude 生成页面 → Playwright 截图 → Vision MCP 对比 → 输出差异 → Claude 修复
+```
+
 ### detailed 模式的七个分析维度
 
 1. UI 布局 — 整体结构、区块位置比例
