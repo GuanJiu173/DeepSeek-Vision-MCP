@@ -90,14 +90,6 @@ VISION_CACHE_DIR=/path/to/cache # 自定义缓存目录
 | `openai` | `gpt-4o-mini` | `https://api.openai.com/v1` |
 | `openrouter` | `openai/gpt-4o` | `https://openrouter.ai/api/v1` |
 
-## 实测
-
-`image_compare` 在设计稿 vs 实现截图对比中：
-- **检出**：按钮颜色偏差、文字内容缺失
-- **漏检**：像素级大小差异（64px vs 48px）、圆角半径、背景色偏差
-
-适合做"有没有差异"的定性检查，精确像素对比需叠加其他工具。
-
 ## 扩展
 
 启动 HTTP 模式调试：
